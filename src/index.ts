@@ -1,83 +1,22 @@
 import { Worker } from "@notionhq/workers";
-import { j } from "@notionhq/workers/schema-builder";
+import { j, type Infer } from "@notionhq/workers/schema-builder";
 import type { PageObjectResponse } from "@notionhq/client";
 
-import { parseCsv, parseConnectionsCsv } from "./lib/csv.js";
+import { normUrl } from "./lib/linkedin.js";
 import {
-  buildConnectionSummaries,
-  buildPeopleIndex,
-  computeContactStatus,
-  matchConnection,
-  normUrl,
-  type ConnectionSummary,
-  type PeopleRecord,
-} from "./lib/linkedin.js";
+  CONTACTS_DATA_SOURCE_ID,
+  NAME_PROP,
+  LINKEDIN_PROP,
+  EMAIL_PROP,
+  CONNECTIONS_RELATION_PROP,
+  STATUS_PROP,
+  MY_PEOPLE_RECORD_ID,
+} from "./lib/config.js";
+import { extractPeopleRecord } from "./lib/people.js";
+import { buildPlan } from "./lib/plan.js";
 
 const worker = new Worker();
 export default worker;
-
-// --- Workspace configuration (Robert McKay's workspace) -------------------
-// See "LinkedIn CRM Sync" skill in the AI Agent Instructions & Skills DB for
-// the source of these values.
-const MY_LINKEDIN_URL = "https://www.linkedin.com/in/robertmckayiv";
-const MY_FULL_NAME = "Robert McKay";
-const MY_PEOPLE_RECORD_ID = "281017129793815eae03fa534f2cd238";
-const CONTACTS_DATA_SOURCE_ID = "d0fba696-df81-4ae9-b43d-ed2bc674edbf";
-
-const NAME_PROP = "Name";
-const LINKEDIN_PROP = "LinkedIn";
-const EMAIL_PROP = "Email";
-const CONNECTIONS_RELATION_PROP = "LinkedIn Connections";
-const STATUS_PROP = "Contact Status";
-const TOUCHPOINTS_PROP = "Touchpoints";
-
-// --- Notion People record helpers ------------------------------------------
-
-function plainText(richText: { plain_text: string }[] | undefined): string {
-  return (richText ?? []).map((t) => t.plain_text).join("");
-}
-
-function extractPeopleRecord(page: PageObjectResponse): PeopleRecord {
-  const props = page.properties as Record<string, any>;
-  const name = props[NAME_PROP]?.type === "title" ? plainText(props[NAME_PROP].title) : "";
-  const linkedin = props[LINKEDIN_PROP]?.type === "url" ? (props[LINKEDIN_PROP].url ?? "") : "";
-  const email = props[EMAIL_PROP]?.type === "email" ? (props[EMAIL_PROP].email ?? "") : "";
-  const contactStatus = props[STATUS_PROP]?.type === "status" ? (props[STATUS_PROP].status?.name ?? null) : null;
-  const linkedinConnections: string[] =
-    props[CONNECTIONS_RELATION_PROP]?.type === "relation"
-      ? props[CONNECTIONS_RELATION_PROP].relation.map((r: { id: string }) => r.id)
-      : [];
-  const hasTouchpoints = props[TOUCHPOINTS_PROP]?.type === "relation" && props[TOUCHPOINTS_PROP].relation.length > 0;
-
-  return {
-    url: page.id,
-    name,
-    linkedin: linkedin ?? "",
-    email: email ?? "",
-    contactStatus,
-    linkedinConnections,
-    hasTouchpoints,
-  };
-}
-
-async function fetchAllPeople(notion: import("@notionhq/client").Client): Promise<PeopleRecord[]> {
-  const people: PeopleRecord[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await notion.dataSources.query({
-      data_source_id: CONTACTS_DATA_SOURCE_ID,
-      start_cursor: cursor,
-      page_size: 100,
-    });
-    for (const result of page.results) {
-      if ("properties" in result) {
-        people.push(extractPeopleRecord(result as PageObjectResponse));
-      }
-    }
-    cursor = page.has_more ? (page.next_cursor ?? undefined) : undefined;
-  } while (cursor);
-  return people;
-}
 
 // --- Plan tool --------------------------------------------------------------
 
@@ -148,18 +87,6 @@ const planOutputSchema = j.object({
   ),
 });
 
-function toPlanSummary(s: ConnectionSummary) {
-  return {
-    fullName: s.fullName,
-    linkedinUrl: s.urlNorm,
-    email: s.email,
-    company: s.company,
-    position: s.position,
-    connectedOn: s.connectedOn,
-    totalMessages: s.totalMessages,
-  };
-}
-
 worker.tool("linkedinSyncPlan", {
   title: "Plan LinkedIn CRM Sync",
   description:
@@ -172,101 +99,8 @@ worker.tool("linkedinSyncPlan", {
   outputSchema: planOutputSchema,
   hints: { readOnlyHint: true },
   execute: async ({ connectionsCsv, messagesCsv, sinceDate }, { notion }) => {
-    const connections = parseConnectionsCsv(connectionsCsv);
-    const messages = parseCsv(messagesCsv).filter((m) => (m["IS MESSAGE DRAFT"] ?? "No") === "No");
-
-    const summaries = buildConnectionSummaries(connections, messages, MY_LINKEDIN_URL);
-    const people = await fetchAllPeople(notion);
-    const index = buildPeopleIndex(people);
-
-    const inScope = sinceDate ? summaries.filter((s) => s.connectedOn > sinceDate) : summaries;
-
-    const creates: { connection: ReturnType<typeof toPlanSummary> }[] = [];
-    const updates: {
-      personId: string;
-      personName: string;
-      matchMethod: string;
-      connection: ReturnType<typeof toPlanSummary>;
-      fillLinkedin: boolean;
-      fillEmail: boolean;
-      addConnectionRelation: boolean;
-    }[] = [];
-    const fuzzyCandidates: {
-      connection: ReturnType<typeof toPlanSummary>;
-      candidatePersonId: string;
-      candidatePersonName: string;
-      score: number;
-    }[] = [];
-
-    // Match every connection in the export once. Used both to build the
-    // in-scope creates/updates/fuzzy lists below, and to drive the Contact
-    // Status pass, which considers *all* connections regardless of `sinceDate`
-    // (message history can change status even for previously-synced connections).
-    const inScopeSet = new Set(inScope);
-    const matchedSummaryByPersonId = new Map<string, ConnectionSummary>();
-
-    for (const summary of summaries) {
-      const result = matchConnection(summary, index);
-
-      if (result.match && !result.method.startsWith("fuzzy:") && !matchedSummaryByPersonId.has(result.match.url)) {
-        matchedSummaryByPersonId.set(result.match.url, summary);
-      }
-
-      if (!inScopeSet.has(summary)) continue;
-
-      if (result.method === "no_match") {
-        creates.push({ connection: toPlanSummary(summary) });
-      } else if (result.method.startsWith("fuzzy:")) {
-        const score = Number(result.method.slice("fuzzy:".length));
-        fuzzyCandidates.push({
-          connection: toPlanSummary(summary),
-          candidatePersonId: result.match!.url,
-          candidatePersonName: result.match!.name,
-          score,
-        });
-      } else {
-        const person = result.match!;
-        updates.push({
-          personId: person.url,
-          personName: person.name,
-          matchMethod: result.method,
-          connection: toPlanSummary(summary),
-          fillLinkedin: !person.linkedin,
-          fillEmail: !person.email && !!summary.email,
-          addConnectionRelation: !person.linkedinConnections.includes(MY_PEOPLE_RECORD_ID),
-        });
-      }
-    }
-
-    const statusChanges: { personId: string; personName: string; currentStatus: string | null; newStatus: string | null }[] = [];
-    for (const person of people) {
-      if (!person.linkedinConnections.includes(MY_PEOPLE_RECORD_ID)) continue;
-      const summary = matchedSummaryByPersonId.get(person.url) ?? null;
-      const decision = computeContactStatus(summary, person.contactStatus, person.hasTouchpoints, MY_FULL_NAME);
-      if (decision.shouldUpdate && decision.newStatus !== person.contactStatus) {
-        statusChanges.push({
-          personId: person.url,
-          personName: person.name,
-          currentStatus: person.contactStatus,
-          newStatus: decision.newStatus,
-        });
-      }
-    }
-
-    return {
-      stats: {
-        connectionsInExport: summaries.length,
-        inScope: inScope.length,
-        creates: creates.length,
-        updates: updates.length,
-        fuzzyCandidates: fuzzyCandidates.length,
-        statusChanges: statusChanges.length,
-      },
-      creates,
-      updates,
-      fuzzyCandidates,
-      statusChanges,
-    };
+    const plan = await buildPlan(notion, connectionsCsv, messagesCsv, sinceDate);
+    return plan as unknown as Infer<typeof planOutputSchema>;
   },
 });
 

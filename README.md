@@ -49,17 +49,35 @@ Run `npm test` to run the unit tests for this logic.
 
 ## Configuration
 
-Workspace-specific IDs are hardcoded as constants at the top of
-`src/index.ts` (taken from the "LinkedIn CRM Sync" skill's Configuration
-table):
+Workspace-specific IDs are hardcoded as constants in `src/lib/config.ts`
+(taken from the "LinkedIn CRM Sync" skill's Configuration table):
 
 - `MY_LINKEDIN_URL`, `MY_FULL_NAME`, `MY_PEOPLE_RECORD_ID`
 - `CONTACTS_DATA_SOURCE_ID`
 - Property names on the People data source: `Name`, `LinkedIn`, `Email`,
   `LinkedIn Connections`, `Contact Status`, `Touchpoints`
 
-If any of these drift (property renamed, etc.), update the constants block
-in `src/index.ts`.
+If any of these drift (property renamed, etc.), update the constants in
+`src/lib/config.ts`.
+
+## Local testing (before deploying)
+
+`scripts/linkedin-plan.ts` runs the same plan logic as the `linkedinSyncPlan`
+tool, but as a plain Node script against a real Notion workspace via
+`@notionhq/client` — no `ntn` CLI or Worker deploy required:
+
+```sh
+NOTION_API_TOKEN=secret_xxx npm run linkedin-plan -- \
+  /path/to/Connections.csv /path/to/messages.csv [sinceDate]
+```
+
+- `NOTION_API_TOKEN` must be an internal integration token with access to the
+  People data source (`CONTACTS_DATA_SOURCE_ID` in `src/lib/config.ts`).
+- `sinceDate` is optional (ISO `YYYY-MM-DD`); omit it or pass `null` to
+  consider every connection.
+- Prints the plan as JSON to stdout. Pipe to a file (`> plan.json`) and
+  review `stats`, `creates`, `fuzzyCandidates`, and `statusChanges` before
+  building any `linkedinSyncApply` actions.
 
 ## Status
 
