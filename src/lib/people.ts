@@ -6,9 +6,7 @@ import {
   NAME_PROP,
   LINKEDIN_PROP,
   EMAIL_PROP,
-  STATUS_PROP,
   CONNECTIONS_RELATION_PROP,
-  TOUCHPOINTS_PROP,
 } from "./config.js";
 import type { PeopleRecord } from "./linkedin.js";
 
@@ -21,21 +19,17 @@ export function extractPeopleRecord(page: PageObjectResponse): PeopleRecord {
   const name = props[NAME_PROP]?.type === "title" ? plainText(props[NAME_PROP].title) : "";
   const linkedin = props[LINKEDIN_PROP]?.type === "url" ? (props[LINKEDIN_PROP].url ?? "") : "";
   const email = props[EMAIL_PROP]?.type === "email" ? (props[EMAIL_PROP].email ?? "") : "";
-  const contactStatus = props[STATUS_PROP]?.type === "status" ? (props[STATUS_PROP].status?.name ?? null) : null;
   const linkedinConnections: string[] =
     props[CONNECTIONS_RELATION_PROP]?.type === "relation"
       ? props[CONNECTIONS_RELATION_PROP].relation.map((r: { id: string }) => r.id)
       : [];
-  const hasTouchpoints = props[TOUCHPOINTS_PROP]?.type === "relation" && props[TOUCHPOINTS_PROP].relation.length > 0;
 
   return {
     url: page.id,
     name,
     linkedin: linkedin ?? "",
     email: email ?? "",
-    contactStatus,
     linkedinConnections,
-    hasTouchpoints,
   };
 }
 

@@ -4,11 +4,10 @@ import { parseCsv, parseConnectionsCsv } from "./csv.js";
 import {
   buildConnectionSummaries,
   buildPeopleIndex,
-  computeContactStatus,
   matchConnection,
   type ConnectionSummary,
 } from "./linkedin.js";
-import { MY_LINKEDIN_URL, MY_FULL_NAME, MY_PEOPLE_RECORD_ID } from "./config.js";
+import { MY_LINKEDIN_URL, MY_PEOPLE_RECORD_ID } from "./config.js";
 import { fetchAllPeople } from "./people.js";
 
 export interface PlanConnectionSummary {
@@ -42,13 +41,6 @@ export interface PlanFuzzyCandidate {
   score: number;
 }
 
-export interface PlanStatusChange {
-  personId: string;
-  personName: string;
-  currentStatus: string | null;
-  newStatus: string | null;
-}
-
 export interface SyncPlan {
   stats: {
     connectionsInExport: number;
@@ -56,12 +48,10 @@ export interface SyncPlan {
     creates: number;
     updates: number;
     fuzzyCandidates: number;
-    statusChanges: number;
   };
   creates: PlanCreate[];
   updates: PlanUpdate[];
   fuzzyCandidates: PlanFuzzyCandidate[];
-  statusChanges: PlanStatusChange[];
 }
 
 function toPlanSummary(s: ConnectionSummary): PlanConnectionSummary {
@@ -95,21 +85,8 @@ export async function buildPlan(
   const updates: PlanUpdate[] = [];
   const fuzzyCandidates: PlanFuzzyCandidate[] = [];
 
-  // Match every connection in the export once. Used both to build the
-  // in-scope creates/updates/fuzzy lists below, and to drive the Contact
-  // Status pass, which considers *all* connections regardless of `sinceDate`
-  // (message history can change status even for previously-synced connections).
-  const inScopeSet = new Set(inScope);
-  const matchedSummaryByPersonId = new Map<string, ConnectionSummary>();
-
-  for (const summary of summaries) {
+  for (const summary of inScope) {
     const result = matchConnection(summary, index);
-
-    if (result.match && !result.method.startsWith("fuzzy:") && !matchedSummaryByPersonId.has(result.match.url)) {
-      matchedSummaryByPersonId.set(result.match.url, summary);
-    }
-
-    if (!inScopeSet.has(summary)) continue;
 
     if (result.method === "no_match") {
       creates.push({ connection: toPlanSummary(summary) });
@@ -135,21 +112,6 @@ export async function buildPlan(
     }
   }
 
-  const statusChanges: PlanStatusChange[] = [];
-  for (const person of people) {
-    if (!person.linkedinConnections.includes(MY_PEOPLE_RECORD_ID)) continue;
-    const summary = matchedSummaryByPersonId.get(person.url) ?? null;
-    const decision = computeContactStatus(summary, person.contactStatus, person.hasTouchpoints, MY_FULL_NAME);
-    if (decision.shouldUpdate && decision.newStatus !== person.contactStatus) {
-      statusChanges.push({
-        personId: person.url,
-        personName: person.name,
-        currentStatus: person.contactStatus,
-        newStatus: decision.newStatus,
-      });
-    }
-  }
-
   return {
     stats: {
       connectionsInExport: summaries.length,
@@ -157,11 +119,9 @@ export async function buildPlan(
       creates: creates.length,
       updates: updates.length,
       fuzzyCandidates: fuzzyCandidates.length,
-      statusChanges: statusChanges.length,
     },
     creates,
     updates,
     fuzzyCandidates,
-    statusChanges,
   };
 }

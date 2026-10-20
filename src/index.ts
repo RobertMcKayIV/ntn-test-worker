@@ -9,7 +9,6 @@ import {
   LINKEDIN_PROP,
   EMAIL_PROP,
   CONNECTIONS_RELATION_PROP,
-  STATUS_PROP,
   MY_PEOPLE_RECORD_ID,
 } from "./lib/config.js";
 import { extractPeopleRecord } from "./lib/people.js";
@@ -49,7 +48,6 @@ const planOutputSchema = j.object({
     creates: j.integer(),
     updates: j.integer(),
     fuzzyCandidates: j.integer(),
-    statusChanges: j.integer(),
   }),
   creates: j.array(
     j.object({
@@ -77,14 +75,6 @@ const planOutputSchema = j.object({
       score: j.number(),
     }),
   ),
-  statusChanges: j.array(
-    j.object({
-      personId: j.string(),
-      personName: j.string(),
-      currentStatus: j.string().nullable(),
-      newStatus: j.string().nullable(),
-    }),
-  ),
 });
 
 worker.tool("linkedinSyncPlan", {
@@ -93,8 +83,7 @@ worker.tool("linkedinSyncPlan", {
     "Analyzes a LinkedIn Connections.csv + messages.csv export against the People database and returns a " +
     "deterministic plan: which connections need new People records, which existing People records need " +
     "LinkedIn/Email filled in or the LinkedIn Connections relation added, which matches are only fuzzy " +
-    "(name similarity) and need human confirmation, and which existing People records (already connected " +
-    "on LinkedIn) need a Contact Status update. Performs no writes.",
+    "(name similarity) and need human confirmation. Performs no writes.",
   schema: planInputSchema,
   outputSchema: planOutputSchema,
   hints: { readOnlyHint: true },
@@ -107,22 +96,19 @@ worker.tool("linkedinSyncPlan", {
 // --- Apply tool --------------------------------------------------------------
 
 const applyActionSchema = j.object({
-  type: j.enum("create_person", "update_person", "update_status"),
+  type: j.enum("create_person", "update_person"),
   // create_person
   fullName: j.string().nullable().describe("Required for create_person."),
   linkedinUrl: j.string().nullable().describe("Required for create_person and update_person."),
   email: j.string().nullable().describe("Optional for create_person and update_person."),
-  // update_person / update_status
-  personId: j.string().nullable().describe("Required for update_person and update_status. The People page id."),
+  // update_person
+  personId: j.string().nullable().describe("Required for update_person. The People page id."),
   fillLinkedin: j.boolean().nullable().describe("For update_person: set the LinkedIn property to linkedinUrl."),
   fillEmail: j.boolean().nullable().describe("For update_person: set the Email property to email."),
   addConnectionRelation: j
     .boolean()
     .nullable()
     .describe("For update_person: add Robert's People record to the LinkedIn Connections relation."),
-  // update_status
-  newStatus: j.string().nullable().describe("For update_status: the new Contact Status value, or null to clear it."),
-  clearStatus: j.boolean().nullable().describe("For update_status: if true, clear Contact Status regardless of newStatus."),
 });
 
 const applyResultSchema = j.object({
@@ -142,7 +128,7 @@ worker.tool("linkedinSyncApply", {
   description:
     "Executes a batch of write actions produced from a linkedinSyncPlan result (after human confirmation), " +
     "creating new People records, filling in LinkedIn/Email and the LinkedIn Connections relation on existing " +
-    "records (without overwriting non-empty values), and updating Contact Status. " +
+    "records (without overwriting non-empty values). " +
     "Fuzzy-match candidates should be converted to update_person actions only after a human confirms the match.",
   schema: j.object({ actions: j.array(applyActionSchema) }),
   outputSchema: applyResultSchema,
@@ -190,17 +176,6 @@ worker.tool("linkedinSyncApply", {
           if (Object.keys(properties).length > 0) {
             await notion.pages.update({ page_id: action.personId, properties: properties as never });
           }
-          results.push({ index, type: action.type, success: true, personId: action.personId, error: null });
-          continue;
-        }
-
-        if (action.type === "update_status") {
-          if (!action.personId) throw new Error("personId is required for update_status");
-          const statusValue = action.clearStatus ? null : action.newStatus ? { name: action.newStatus } : null;
-          await notion.pages.update({
-            page_id: action.personId,
-            properties: { [STATUS_PROP]: { status: statusValue } } as never,
-          });
           results.push({ index, type: action.type, success: true, personId: action.personId, error: null });
           continue;
         }

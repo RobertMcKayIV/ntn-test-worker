@@ -20,17 +20,14 @@ Two **tool** capabilities, callable from a Notion Custom Agent (or via
     currently empty and would be filled
   - `fuzzyCandidates` — name-similarity matches (>= 0.80) that need a human
     to confirm before being treated as a match
-  - `statusChanges` — Contact Status updates for every People record already
-    linked to Robert via "LinkedIn Connections", computed from message
-    history (mirrors Step 4 of the original skill)
 
 - **`linkedinSyncApply`** — takes a list of actions (`create_person`,
-  `update_person`, `update_status`), each derived from the plan above
-  (typically after a human reviews `creates`/`fuzzyCandidates`/`statusChanges`
+  `update_person`), each derived from the plan above
+  (typically after a human reviews `creates`/`fuzzyCandidates`
   in chat), and performs the writes. `update_person` only fills properties
   that are currently empty — it never overwrites existing data.
 
-## Matching & status logic
+## Matching logic
 
 `src/lib/linkedin.ts` is a straight port of the skill's Python logic:
 
@@ -41,9 +38,6 @@ Two **tool** capabilities, callable from a Notion Custom Agent (or via
   reply date)
 - `matchConnection` — URL -> email -> exact name -> fuzzy name (LCS-based
   similarity ratio, threshold 0.80)
-- `computeContactStatus` — the Contact Status decision table (protected
-  statuses, "Responded (follow up)", "Went cold",
-  "Complete (check in periodically)", etc.)
 
 Run `npm test` to run the unit tests for this logic.
 
@@ -55,7 +49,7 @@ Workspace-specific IDs are hardcoded as constants in `src/lib/config.ts`
 - `MY_LINKEDIN_URL`, `MY_FULL_NAME`, `MY_PEOPLE_RECORD_ID`
 - `CONTACTS_DATA_SOURCE_ID`
 - Property names on the People data source: `Name`, `LinkedIn`, `Email`,
-  `LinkedIn Connections`, `Contact Status`, `Touchpoints`
+  `LinkedIn Connections`
 
 If any of these drift (property renamed, etc.), update the constants in
 `src/lib/config.ts`.
@@ -76,27 +70,13 @@ NOTION_API_TOKEN=secret_xxx npm run linkedin-plan -- \
 - `sinceDate` is optional (ISO `YYYY-MM-DD`); omit it or pass `null` to
   consider every connection.
 - Prints the plan as JSON to stdout. Pipe to a file (`> plan.json`) and
-  review `stats`, `creates`, `fuzzyCandidates`, and `statusChanges` before
+  review `stats`, `creates`, and `fuzzyCandidates` before
   building any `linkedinSyncApply` actions.
 
-## Status
+## Deployment
 
-**Not yet deployed.** This session could not install the `ntn` CLI
-(`curl -fsSL https://ntn.dev | bash`, or `npm install --global ntn`) because
-piping a remote script into a shell is blocked by this environment's
-permission policy.
-
-To deploy:
-
-```sh
-curl -fsSL https://ntn.dev | bash   # install the Notion CLI (macOS/Linux; WSL on Windows)
-ntn login                           # authenticate with the workspace
-cd ntn-test-worker
-ntn workers deploy                  # build and upload
-```
-
-Requires the workspace to be on a Business/Enterprise plan with Workers
-enabled (a workspace owner enables this in workspace settings).
+Deployed with `ntn workers deploy` (worker ID in `workers.json`). Re-run the
+same command to push updates.
 
 ## Suggested next steps
 
@@ -105,10 +85,8 @@ enabled (a workspace owner enables this in workspace settings).
    `sinceDate: null` for a first full pass; review `stats` before doing
    anything else (a `creates` count over ~1500 likely means a normalization
    bug — same warning as the original skill).
-3. Review `fuzzyCandidates` and `statusChanges` with Robert in chat, then
+3. Review `creates` and `fuzzyCandidates` with Robert in chat, then
    build the `actions` array for `linkedinSyncApply` from the confirmed
    items.
-4. Consider a follow-up **sync** capability that pulls Contact Status
-   changes on a schedule without requiring a fresh CSV export each time
-   (message history would need a different data source, since LinkedIn
-   doesn't offer a live messages API).
+4. Contact Status sync was removed when that property was replaced by `Warmth`.
+   Re-adding status/warmth updates needs new rules for the `Warmth` select.

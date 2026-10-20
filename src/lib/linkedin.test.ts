@@ -3,7 +3,6 @@ import { test } from "node:test";
 import {
   buildConnectionSummaries,
   buildPeopleIndex,
-  computeContactStatus,
   matchConnection,
   normUrl,
   ratio,
@@ -79,9 +78,9 @@ test("buildConnectionSummaries aggregates message history per connection", () =>
 
 test("matchConnection prefers URL > email > exact name > fuzzy name", () => {
   const people = [
-    { url: "p1", name: "Jane Doe", linkedin: "https://www.linkedin.com/in/jane-doe", email: "", contactStatus: null, linkedinConnections: [], hasTouchpoints: false },
-    { url: "p2", name: "John Smith", linkedin: "", email: "john@example.com", contactStatus: null, linkedinConnections: [], hasTouchpoints: false },
-    { url: "p3", name: "Alicia Keyes", linkedin: "", email: "", contactStatus: null, linkedinConnections: [], hasTouchpoints: false },
+    { url: "p1", name: "Jane Doe", linkedin: "https://www.linkedin.com/in/jane-doe", email: "", linkedinConnections: [] },
+    { url: "p2", name: "John Smith", linkedin: "", email: "john@example.com", linkedinConnections: [] },
+    { url: "p3", name: "Alicia Keyes", linkedin: "", email: "", linkedinConnections: [] },
   ];
   const index = buildPeopleIndex(people);
 
@@ -103,59 +102,4 @@ test("matchConnection prefers URL > email > exact name > fuzzy name", () => {
   const fuzzy = matchConnection({ fullName: "Alicia Keys", urlNorm: "", email: "" } as any, index, 0.8);
   assert.match(fuzzy.method, /^fuzzy:/);
   assert.equal(fuzzy.match?.url, "p3");
-});
-
-test("computeContactStatus: protected statuses are never touched", () => {
-  const decision = computeContactStatus(null, "DNC", false, MY_NAME);
-  assert.equal(decision.shouldUpdate, false);
-  assert.equal(decision.newStatus, "DNC");
-});
-
-test("computeContactStatus: connection's last message -> Responded (follow up)", () => {
-  const summary = {
-    totalMessages: 1,
-    lastMessageFrom: "Jane Doe",
-    everReplied: true,
-    lastReplyDate: new Date().toISOString(),
-  } as any;
-  const decision = computeContactStatus(summary, "Cold", false, MY_NAME);
-  assert.deepEqual(decision, { newStatus: "Responded (follow up)", shouldUpdate: true });
-});
-
-test("computeContactStatus: I sent, never replied -> Accepted Connect but Didn't Write Back", () => {
-  const summary = {
-    totalMessages: 1,
-    lastMessageFrom: MY_NAME,
-    everReplied: false,
-    lastReplyDate: "",
-  } as any;
-  const decision = computeContactStatus(summary, "Sent", false, MY_NAME);
-  assert.deepEqual(decision, { newStatus: "Accepted Connect but Didn't Write Back", shouldUpdate: true });
-});
-
-test("computeContactStatus: I sent, they replied >30d ago -> Went cold", () => {
-  const longAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
-  const summary = {
-    totalMessages: 2,
-    lastMessageFrom: MY_NAME,
-    everReplied: true,
-    lastReplyDate: longAgo,
-  } as any;
-  const decision = computeContactStatus(summary, "Responded (follow up)", false, MY_NAME);
-  assert.deepEqual(decision, { newStatus: "Went cold", shouldUpdate: true });
-});
-
-test("computeContactStatus: no messages, has touchpoints -> Complete (check in periodically)", () => {
-  const decision = computeContactStatus(null, "Cold", true, MY_NAME);
-  assert.deepEqual(decision, { newStatus: "Complete (check in periodically)", shouldUpdate: true });
-});
-
-test("computeContactStatus: no messages, no touchpoints, clearable status -> clear", () => {
-  const decision = computeContactStatus(null, "Met Briefly", false, MY_NAME);
-  assert.deepEqual(decision, { newStatus: null, shouldUpdate: true });
-});
-
-test("computeContactStatus: no messages, no touchpoints, non-clearable status -> no-op", () => {
-  const decision = computeContactStatus(null, "Primary", false, MY_NAME);
-  assert.deepEqual(decision, { newStatus: "Primary", shouldUpdate: false });
 });

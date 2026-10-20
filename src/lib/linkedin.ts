@@ -1,7 +1,6 @@
 /**
  * Deterministic core of the LinkedIn CRM Sync skill: CSV normalization,
- * message-history aggregation, People-record matching (exact + fuzzy),
- * and Contact Status computation.
+ * message-history aggregation, and People-record matching (exact + fuzzy).
  *
  * This is a straight port of the Python logic from the "LinkedIn CRM Sync"
  * skill (see Notion AI Agent Instructions & Skills DB), with the same
@@ -144,11 +143,9 @@ export interface PeopleRecord {
   name: string;
   linkedin: string;
   email: string;
-  contactStatus: string | null;
   /** Page IDs currently in the "LinkedIn Connections" relation. */
   linkedinConnections: string[];
   /** True if the "Touchpoints" relation is non-empty. */
-  hasTouchpoints: boolean;
 }
 
 interface PeopleIndex {
@@ -236,58 +233,4 @@ export function matchConnection(summary: ConnectionSummary, index: PeopleIndex, 
     return { summary, method: `fuzzy:${best.toFixed(2)}`, match: bestRow };
   }
   return { summary, method: "no_match", match: null };
-}
-
-const PROTECTED_STATUSES = new Set(["Scheduled", "Complete (check in periodically)", "DNC"]);
-const CLEAR_IF_REMAINING = new Set(["Cold", "Secondary", "Event Overlap", "Met Briefly", "Sent"]);
-
-export interface StatusDecision {
-  /** New status to write, or null to clear the property. Ignored if shouldUpdate is false. */
-  newStatus: string | null;
-  shouldUpdate: boolean;
-}
-
-/**
- * Compute the Contact Status update for a People record, given its
- * matched connection summary (if any). Mirrors Step 4's compute_status.
- *
- * @param summary - the matched connection summary, or null if this
- *   People record has no corresponding row in the current export
- *   (e.g. it was removed from Connections.csv, or never matched).
- */
-export function computeContactStatus(
-  summary: ConnectionSummary | null,
-  currentStatus: string | null,
-  hasTouchpoints: boolean,
-  myFullName: string,
-  now: Date = new Date(),
-): StatusDecision {
-  if (currentStatus && PROTECTED_STATUSES.has(currentStatus)) {
-    return { newStatus: currentStatus, shouldUpdate: false };
-  }
-
-  const total = summary?.totalMessages ?? 0;
-
-  if (total > 0) {
-    if (summary!.lastMessageFrom !== myFullName) {
-      return { newStatus: "Responded (follow up)", shouldUpdate: true };
-    }
-    if (!summary!.everReplied) {
-      return { newStatus: "Accepted Connect but Didn't Write Back", shouldUpdate: true };
-    }
-    const lastReply = new Date(summary!.lastReplyDate);
-    const daysSince = (now.getTime() - lastReply.getTime()) / (1000 * 60 * 60 * 24);
-    if (daysSince < 30) {
-      return { newStatus: "Responded (follow up)", shouldUpdate: true };
-    }
-    return { newStatus: "Went cold", shouldUpdate: true };
-  }
-
-  if (hasTouchpoints) {
-    return { newStatus: "Complete (check in periodically)", shouldUpdate: true };
-  }
-  if (currentStatus && CLEAR_IF_REMAINING.has(currentStatus)) {
-    return { newStatus: null, shouldUpdate: true };
-  }
-  return { newStatus: currentStatus, shouldUpdate: false };
 }
