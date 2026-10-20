@@ -11,5 +11,5 @@ export const NAME_PROP = "Name";
 export const LINKEDIN_PROP = "LinkedIn";
 export const EMAIL_PROP = "Email";
 export const CONNECTIONS_RELATION_PROP = "LinkedIn Connections";
-export const STATUS_PROP = "Contact Status";
+export const STATUS_PROP = "Warmth";
 export const TOUCHPOINTS_PROP = "Touchpoints";
